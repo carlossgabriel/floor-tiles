@@ -16,6 +16,7 @@ export type TileInput = {
   height: number;
   groutMm: number;
   rowOffset: number;
+  offsetFlipRows: number;
   rotationDeg: number;
 };
 
@@ -25,6 +26,7 @@ export type VisibleTile = {
   col: number;
   polygon: Point[];
   tilePolygon: Point[];
+  localTilePolygon: Point[];
   localPolygon: Point[];
   area: number;
   isFull: boolean;

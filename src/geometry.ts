@@ -182,15 +182,27 @@ function mod(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
+function getRowOffset(row: number, rowOffset: number, offsetFlipRows: number, pitchX: number) {
+  if (offsetFlipRows <= 0) return mod(row * rowOffset, pitchX);
+
+  const rowsPerLeg = Math.max(1, Math.floor(offsetFlipRows));
+  const cycleLength = rowsPerLeg * 2;
+  const cycleRow = mod(row, cycleLength);
+  const legRow = cycleRow < rowsPerLeg ? cycleRow : cycleLength - cycleRow;
+
+  return mod(legRow * rowOffset, pitchX);
+}
+
 export function buildLayout(roomInput: RoomInput, tileInput: TileInput): LayoutResult {
   const room = buildRoomPolygon(roomInput);
   if (!room.polygon.length) {
     return emptyLayout(room.message);
   }
 
-  const { width, height, groutMm, rowOffset, rotationDeg } = tileInput;
+  const { width, height, groutMm, rowOffset, offsetFlipRows, rotationDeg } = tileInput;
   if (width <= 0 || height <= 0) return emptyLayout('Tile width and height must be greater than zero.');
   if (groutMm < 0) return emptyLayout('Grout gap cannot be negative.');
+  if (offsetFlipRows < 0) return emptyLayout('Offset flip rows cannot be negative.');
 
   const roomPolygon = room.polygon;
   const origin = centroid(roomPolygon);
@@ -208,7 +220,7 @@ export function buildLayout(roomInput: RoomInput, tileInput: TileInput): LayoutR
   const tileArea = width * height;
 
   for (let row = minRow; row <= maxRow; row += 1) {
-    const stagger = mod(row * rowOffset, pitchX);
+    const stagger = getRowOffset(row, rowOffset, offsetFlipRows, pitchX);
     for (let col = minCol; col <= maxCol; col += 1) {
       const x = col * pitchX + stagger;
       const y = row * pitchY;
@@ -224,6 +236,7 @@ export function buildLayout(roomInput: RoomInput, tileInput: TileInput): LayoutR
           col,
           polygon: localClipped.map((point) => rotatePoint(point, rotationDeg, origin)),
           tilePolygon: localTilePolygon.map((point) => rotatePoint(point, rotationDeg, origin)),
+          localTilePolygon,
           localPolygon: localClipped,
           area,
           isFull: area >= tileArea - 0.05,

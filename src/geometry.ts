@@ -78,7 +78,9 @@ export function buildRoomPolygon(input: RoomInput): { polygon: Point[]; message?
     { x: base.x - uy * h, y: base.y + ux * h },
     { x: base.x + uy * h, y: base.y - ux * h },
   ];
-  const p2 = candidates.find((point) => point.y >= Math.min(p1.y, p3.y) - EPSILON) ?? candidates[0];
+  const p2 = candidates.reduce((best, point) =>
+    polygonArea([p0, p1, point, p3]) > polygonArea([p0, p1, best, p3]) ? point : best,
+  );
   const polygon = normalizePolygon([p0, p1, p2, p3]);
 
   return polygonArea(polygon) > EPSILON

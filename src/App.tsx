@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Check, Copy, Download, Grid2X2, Home, Image as ImageIcon, Maximize2, Ruler, RotateCw, Trash2, Upload, X } from 'lucide-react';
+import { Check, Copy, Download, Grid2X2, Home, Image as ImageIcon, Maximize2, Minus, Plus, Ruler, RotateCw, Trash2, Upload, X } from 'lucide-react';
 import { buildLayout, pointsToString } from './geometry';
+import { buildRowOffsetMeasurements } from './measurements';
 import type { Point, ReusePair, RoomInput, TileInput, VisibleTile } from './types';
 
 const initialRoom: RoomInput = {
@@ -93,6 +94,21 @@ function updateNumber<T extends Record<string, number>>(
   setter((current) => ({ ...current, [key]: Number.isFinite(parsed) ? parsed : 0 }));
 }
 
+function clampNumber(value: number, min?: number, max?: number) {
+  const aboveMin = min === undefined ? value : Math.max(min, value);
+  return max === undefined ? aboveMin : Math.min(max, aboveMin);
+}
+
+function setNumberValue<T extends Record<string, number>>(
+  setter: React.Dispatch<React.SetStateAction<T>>,
+  key: keyof T,
+  value: number,
+  min?: number,
+  max?: number,
+) {
+  setter((current) => ({ ...current, [key]: clampNumber(value, min, max) }));
+}
+
 function escapeAttribute(value: string) {
   return value
     .replaceAll('&', '&amp;')
@@ -176,6 +192,26 @@ function buildTileImageSvgLayer(layout: ReturnType<typeof buildLayout>, tileFill
     </g>`;
 }
 
+function buildRowOffsetMeasurementSvgLayer(layout: ReturnType<typeof buildLayout>, tile: TileInput) {
+  const measurements = buildRowOffsetMeasurements(layout.tiles, tile);
+  if (!measurements.length) return '';
+
+  const origin = getRoomCentroid(layout.roomPolygon);
+
+  return `<g class="row-offset-measurement-layer" transform="rotate(${tile.rotationDeg.toFixed(2)} ${origin.x.toFixed(2)} ${origin.y.toFixed(2)})">
+    ${measurements
+      .map(
+        (measurement) => `<g>
+      <line x1="${measurement.lineStart.x.toFixed(2)}" y1="${measurement.lineStart.y.toFixed(2)}" x2="${measurement.lineEnd.x.toFixed(2)}" y2="${measurement.lineEnd.y.toFixed(2)}" class="row-offset-measurement-line" />
+      <line x1="${measurement.firstTickStart.x.toFixed(2)}" y1="${measurement.firstTickStart.y.toFixed(2)}" x2="${measurement.firstTickEnd.x.toFixed(2)}" y2="${measurement.firstTickEnd.y.toFixed(2)}" class="row-offset-measurement-tick" />
+      <line x1="${measurement.secondTickStart.x.toFixed(2)}" y1="${measurement.secondTickStart.y.toFixed(2)}" x2="${measurement.secondTickEnd.x.toFixed(2)}" y2="${measurement.secondTickEnd.y.toFixed(2)}" class="row-offset-measurement-tick" />
+      <text x="${measurement.labelPoint.x.toFixed(2)}" y="${measurement.labelPoint.y.toFixed(2)}" class="row-offset-measurement-label">${measurement.label}</text>
+    </g>`,
+      )
+      .join('\n    ')}
+  </g>`;
+}
+
 function buildSvgMarkup(
   layout: ReturnType<typeof buildLayout>,
   room: RoomInput,
@@ -205,6 +241,7 @@ function buildSvgMarkup(
         )
         .join('\n  ')
     : '';
+  const rowOffsetMeasurements = showMeasurementView ? buildRowOffsetMeasurementSvgLayer(layout, tile) : '';
   const svgClass = showMeasurementView ? 'measurement-svg' : '';
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}" class="${svgClass}" role="img" aria-label="Scaled floor tile layout">
@@ -219,6 +256,9 @@ function buildSvgMarkup(
       .measurement-svg .tile-edge { stroke: rgba(0, 0, 0, 0.55); }
       .measurement-svg .room-outline { fill: none; stroke: #000000; }
       .measurement-label { fill: #000000; font-family: Inter, Arial, sans-serif; font-size: 14px; font-weight: 800; paint-order: stroke; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; text-anchor: middle; dominant-baseline: central; }
+      .row-offset-measurement-line { stroke: #269bc0; stroke-dasharray: 8 8; stroke-linecap: round; stroke-width: 2; }
+      .row-offset-measurement-tick { stroke: #269bc0; stroke-linecap: round; stroke-width: 2; }
+      .row-offset-measurement-label { fill: #269bc0; font-family: Inter, Arial, sans-serif; font-size: 14px; font-weight: 800; paint-order: stroke; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; text-anchor: middle; dominant-baseline: central; }
     </style>
     <clipPath id="room-clip">
       <polygon points="${roomPoints}" />
@@ -235,6 +275,7 @@ function buildSvgMarkup(
   </g>
   ${tileEdges}
   <polygon points="${roomPoints}" class="room-outline" />
+  ${rowOffsetMeasurements}
   ${measurementLabels}
 </svg>`;
 }
@@ -284,18 +325,25 @@ async function renderSvgToPngBlob(svgMarkup: string, viewBox: string) {
   }
 }
 
-async function copySvgImageToClipboard(svgMarkup: string, viewBox: string) {
+async function copyLayoutImageToClipboard(svgMarkup: string, viewBox: string) {
   if (!navigator.clipboard?.write || !window.isSecureContext || !('ClipboardItem' in window)) {
     throw new Error('Image clipboard writes are not supported in this browser.');
   }
 
-  const svgBlob = new Blob([svgMarkup], { type: 'image/svg+xml' });
   try {
-    await navigator.clipboard.write([new ClipboardItem({ [svgBlob.type]: svgBlob })]);
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'image/png': renderSvgToPngBlob(svgMarkup, viewBox),
+      }),
+    ]);
     return;
   } catch {
     const pngBlob = await renderSvgToPngBlob(svgMarkup, viewBox);
-    await navigator.clipboard.write([new ClipboardItem({ [pngBlob.type]: pngBlob })]);
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        [pngBlob.type]: pngBlob,
+      }),
+    ]);
   }
 }
 
@@ -318,6 +366,7 @@ export function App() {
   const roomCentroid = useMemo(() => getRoomCentroid(layout.roomPolygon), [layout.roomPolygon]);
   const showTileFill = Boolean(tileFill && !showMeasurementView);
   const roomMeasurementLabels = useMemo(() => getRoomMeasurementLabels(layout.roomPolygon, room), [layout.roomPolygon, room]);
+  const rowOffsetMeasurements = useMemo(() => buildRowOffsetMeasurements(layout.tiles, tile), [layout.tiles, tile]);
   const svgMarkup = useMemo(
     () => buildSvgMarkup(layout, room, tile, tileFill, viewBox, showMeasurementView),
     [layout, room, tile, tileFill, viewBox, showMeasurementView],
@@ -341,7 +390,7 @@ export function App() {
 
   async function handleCopySvg() {
     try {
-      await copySvgImageToClipboard(svgMarkup, viewBox);
+      await copyLayoutImageToClipboard(svgMarkup, viewBox);
       setCopyState('copied');
     } catch {
       setCopyState('failed');
@@ -386,14 +435,19 @@ export function App() {
             <NumberField label="Bottom side" value={room.bottom} suffix="cm" onChange={(value) => updateNumber(setRoom, 'bottom', value)} />
             <NumberField label="Left side" value={room.left} suffix="cm" onChange={(value) => updateNumber(setRoom, 'left', value)} />
           </div>
-          <RangeField
+          <StepperNumberField
             label="Corner angle"
             value={room.angleDeg}
             min={35}
             max={145}
             step={1}
             suffix="deg"
-            onChange={(value) => updateNumber(setRoom, 'angleDeg', value)}
+            presets={[
+              { label: '45deg', value: 45 },
+              { label: '90deg', value: 90 },
+              { label: '135deg', value: 135 },
+            ]}
+            onChange={(value) => setNumberValue(setRoom, 'angleDeg', value, 35, 145)}
           />
         </section>
 
@@ -406,17 +460,30 @@ export function App() {
             <NumberField label="Width" value={tile.width} suffix="cm" onChange={(value) => updateNumber(setTile, 'width', value)} />
             <NumberField label="Height" value={tile.height} suffix="cm" onChange={(value) => updateNumber(setTile, 'height', value)} />
             <NumberField label="Grout" value={tile.groutMm} suffix="mm" onChange={(value) => updateNumber(setTile, 'groutMm', value)} />
-            <NumberField label="Row offset" value={tile.rowOffset} suffix="cm" onChange={(value) => updateNumber(setTile, 'rowOffset', value)} />
-            <NumberField
+            <PresetNumberField
+              label="Row offset"
+              value={tile.rowOffset}
+              suffix="cm"
+              presets={[
+                { label: '0', value: 0 },
+                { label: '1/3', value: tile.width / 3 },
+                { label: '1/2', value: tile.width / 2 },
+              ]}
+              onChange={(value) => setNumberValue(setTile, 'rowOffset', value)}
+            />
+            <ToggleNumberField
               label="Flip after"
               value={tile.offsetFlipRows}
               min={0}
               step={1}
               suffix="rows"
-              onChange={(value) => updateNumber(setTile, 'offsetFlipRows', value)}
+              enabledLabel="On"
+              disabledLabel="Off"
+              defaultEnabledValue={2}
+              onChange={(value) => setNumberValue(setTile, 'offsetFlipRows', Math.floor(value), 0)}
             />
           </div>
-          <RangeField
+          <StepperNumberField
             label="Grid rotation"
             value={tile.rotationDeg}
             min={-90}
@@ -424,7 +491,13 @@ export function App() {
             step={1}
             suffix="deg"
             icon={<RotateCw size={16} aria-hidden="true" />}
-            onChange={(value) => updateNumber(setTile, 'rotationDeg', value)}
+            presets={[
+              { label: '-45deg', value: -45 },
+              { label: '0deg', value: 0 },
+              { label: '45deg', value: 45 },
+              { label: '90deg', value: 90 },
+            ]}
+            onChange={(value) => setNumberValue(setTile, 'rotationDeg', value, -90, 90)}
           />
         </section>
 
@@ -468,9 +541,9 @@ export function App() {
               type="button"
               className={showMeasurementView ? 'icon-button icon-button-active' : 'icon-button'}
               onClick={() => setShowMeasurementView((current) => !current)}
-              aria-label="Toggle black and white measurements in centimeters"
+              aria-label="Toggle measurement view in centimeters"
               aria-pressed={showMeasurementView}
-              title="Black and white measurements"
+              title="Measurement view"
             >
               <Ruler size={18} aria-hidden="true" />
             </button>
@@ -478,9 +551,9 @@ export function App() {
               type="button"
               className={tileFill ? 'icon-button icon-button-active' : 'icon-button'}
               onClick={() => setTileFillDialogOpen(true)}
-              aria-label="Upload tile image fill"
+              aria-label="Open tile image fill settings"
               aria-pressed={Boolean(tileFill)}
-              title="Tile image fill"
+              title="Tile image fill settings"
             >
               <ImageIcon size={18} aria-hidden="true" />
             </button>
@@ -488,8 +561,8 @@ export function App() {
               type="button"
               className={copyState === 'failed' ? 'icon-button icon-button-error' : 'icon-button'}
               onClick={handleCopySvg}
-              aria-label="Copy SVG to clipboard"
-              title={copyState === 'failed' ? 'Copy failed' : 'Copy SVG'}
+              aria-label="Copy layout image to clipboard"
+              title={copyState === 'failed' ? 'Copy failed' : 'Copy image'}
             >
               {copyState === 'copied' && <Check size={18} aria-hidden="true" />}
               {copyState === 'failed' && <X size={18} aria-hidden="true" />}
@@ -566,6 +639,40 @@ export function App() {
             <polygon points={pointsToString(layout.roomPolygon)} className="room-outline" />
             {showMeasurementView && (
               <g className="measurement-layer" aria-label="Room side measurements in centimeters">
+                <g
+                  className="row-offset-measurement-layer"
+                  aria-label="Repeated row offset measurements in centimeters"
+                  transform={`rotate(${tile.rotationDeg} ${roomCentroid.x} ${roomCentroid.y})`}
+                >
+                  {rowOffsetMeasurements.map((measurement) => (
+                    <g key={measurement.id}>
+                      <line
+                        x1={measurement.lineStart.x}
+                        y1={measurement.lineStart.y}
+                        x2={measurement.lineEnd.x}
+                        y2={measurement.lineEnd.y}
+                        className="row-offset-measurement-line"
+                      />
+                      <line
+                        x1={measurement.firstTickStart.x}
+                        y1={measurement.firstTickStart.y}
+                        x2={measurement.firstTickEnd.x}
+                        y2={measurement.firstTickEnd.y}
+                        className="row-offset-measurement-tick"
+                      />
+                      <line
+                        x1={measurement.secondTickStart.x}
+                        y1={measurement.secondTickStart.y}
+                        x2={measurement.secondTickEnd.x}
+                        y2={measurement.secondTickEnd.y}
+                        className="row-offset-measurement-tick"
+                      />
+                      <text x={measurement.labelPoint.x} y={measurement.labelPoint.y} className="row-offset-measurement-label">
+                        {measurement.label}
+                      </text>
+                    </g>
+                  ))}
+                </g>
                 {roomMeasurementLabels.map((label) => (
                   <text
                     key={label.id}
@@ -727,20 +834,161 @@ function NumberField({ label, value, suffix, min = 0, step = 'any', onChange }: 
   );
 }
 
-type RangeFieldProps = NumberFieldProps & {
+type NumberPreset = {
+  label: string;
+  value: number;
+};
+
+type PresetNumberFieldProps = {
+  label: string;
+  value: number;
+  suffix: string;
+  min?: number;
+  step?: number | 'any';
+  presets: NumberPreset[];
+  icon?: React.ReactNode;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+};
+
+function PresetNumberField({ disabled = false, icon, label, min = 0, presets, step = 'any', suffix, value, onChange }: PresetNumberFieldProps) {
+  return (
+    <label className="field preset-field">
+      <span>{icon}{label}</span>
+      <div className="input-shell">
+        <input
+          type="number"
+          value={value}
+          min={min}
+          step={step}
+          disabled={disabled}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <small>{suffix}</small>
+      </div>
+      <div className="preset-row" aria-label={`${label} presets`}>
+        {presets.map((preset) => (
+          <button
+            key={`${label}-${preset.label}`}
+            type="button"
+            className={Math.abs(value - preset.value) < 0.001 ? 'preset-button preset-button-active' : 'preset-button'}
+            disabled={disabled}
+            onClick={() => onChange(preset.value)}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+    </label>
+  );
+}
+
+type StepperNumberFieldProps = Omit<PresetNumberFieldProps, 'onChange'> & {
   min: number;
   max: number;
   step: number;
-  icon?: React.ReactNode;
+  onChange: (value: number) => void;
 };
 
-function RangeField({ label, value, suffix, min, max, step, icon, onChange }: RangeFieldProps) {
+function StepperNumberField({ icon, label, max, min, presets, step, suffix, value, onChange }: StepperNumberFieldProps) {
+  const updateValue = (nextValue: number) => onChange(clampNumber(nextValue, min, max));
+
   return (
-    <label className="field range-field">
+    <label className="field stepper-field">
       <span>{icon}{label}</span>
-      <input type="range" value={value} min={min} max={max} step={step} onChange={(event) => onChange(event.target.value)} />
-      <output>{value}{suffix}</output>
+      <div className="stepper-shell">
+        <button type="button" className="stepper-button" onClick={() => updateValue(value - step)} aria-label={`Decrease ${label}`}>
+          <Minus size={15} aria-hidden="true" />
+        </button>
+        <div className="input-shell">
+          <input
+            type="number"
+            value={value}
+            min={min}
+            max={max}
+            step={step}
+            onChange={(event) => updateValue(Number(event.target.value))}
+          />
+          <small>{suffix}</small>
+        </div>
+        <button type="button" className="stepper-button" onClick={() => updateValue(value + step)} aria-label={`Increase ${label}`}>
+          <Plus size={15} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="preset-row" aria-label={`${label} presets`}>
+        {presets.map((preset) => (
+          <button
+            key={`${label}-${preset.label}`}
+            type="button"
+            className={value === preset.value ? 'preset-button preset-button-active' : 'preset-button'}
+            onClick={() => updateValue(preset.value)}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
     </label>
+  );
+}
+
+type ToggleNumberFieldProps = {
+  label: string;
+  value: number;
+  suffix: string;
+  min: number;
+  step: number;
+  enabledLabel: string;
+  disabledLabel: string;
+  defaultEnabledValue: number;
+  onChange: (value: number) => void;
+};
+
+function ToggleNumberField({
+  defaultEnabledValue,
+  disabledLabel,
+  enabledLabel,
+  label,
+  min,
+  step,
+  suffix,
+  value,
+  onChange,
+}: ToggleNumberFieldProps) {
+  const isEnabled = value > 0;
+
+  return (
+    <div className="field toggle-number-field">
+      <span>{label}</span>
+      <div className="segmented-control" aria-label={`${label} mode`}>
+        <button
+          type="button"
+          className={!isEnabled ? 'segment-button segment-button-active' : 'segment-button'}
+          aria-pressed={!isEnabled}
+          onClick={() => onChange(0)}
+        >
+          {disabledLabel}
+        </button>
+        <button
+          type="button"
+          className={isEnabled ? 'segment-button segment-button-active' : 'segment-button'}
+          aria-pressed={isEnabled}
+          onClick={() => onChange(value > 0 ? value : defaultEnabledValue)}
+        >
+          {enabledLabel}
+        </button>
+      </div>
+      <div className="input-shell">
+        <input
+          type="number"
+          value={value}
+          min={min}
+          step={step}
+          disabled={!isEnabled}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <small>{suffix}</small>
+      </div>
+    </div>
   );
 }
 
